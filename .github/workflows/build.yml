@@ -1,0 +1,126 @@
+
+name: Build PushWake unsigned IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "PushWake/**"
+      - "PushWake.xcodeproj/**"
+      - ".github/workflows/build.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build PushWake for iPhone
+    runs-on: macos-26
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Select Xcode 26.3
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '26.3'
+
+      - name: Verify Xcode and iOS SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=== XCODE ==="
+          xcodebuild -version
+
+          echo "=== AVAILABLE SDKS ==="
+          xcodebuild -showsdks
+
+          echo "=== ACTIVE IOS SDK ==="
+          SDK_VERSION="$(xcrun --sdk iphoneos --show-sdk-version)"
+          echo "iOS SDK: $SDK_VERSION"
+
+          if [[ "$SDK_VERSION" != 26.* ]]; then
+            echo "::error::iOS 26 SDK required."
+            exit 1
+          fi
+
+          echo "=== PROJECT FILES ==="
+          ls -la
+          test -d PushWake.xcodeproj
+          test -d PushWake
+
+      - name: Check Xcode project and schemes
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          xcodebuild \
+            -list \
+            -project PushWake.xcodeproj
+
+      - name: Build app for real iPhone
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "=== BUILDING PUSHWAKE ==="
+
+          xcodebuild \
+            -project PushWake.xcodeproj \
+            -scheme PushWake \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath "$RUNNER_TEMP/PushWakeBuild" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            build \
+            2>&1 | tee "$RUNNER_TEMP/build.log"
+
+          echo "=== BUILD COMPLETED ==="
+
+      - name: Package unsigned IPA
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          APP="$RUNNER_TEMP/PushWakeBuild/Build/Products/Release-iphoneos/PushWake.app"
+
+          if [[ ! -d "$APP" ]]; then
+            echo "::error::PushWake.app not found."
+            exit 1
+          fi
+
+          mkdir -p "$RUNNER_TEMP/ipa/Payload"
+          cp -R "$APP" "$RUNNER_TEMP/ipa/Payload/"
+
+          cd "$RUNNER_TEMP/ipa"
+
+          zip -q -r \
+            "$GITHUB_WORKSPACE/PushWake-unsigned.ipa" \
+            Payload
+
+          echo "=== IPA CREATED ==="
+          ls -lh "$GITHUB_WORKSPACE/PushWake-unsigned.ipa"
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: PushWake-unsigned-ipa
+          path: PushWake-unsigned.ipa
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: PushWake-build-logs
+          path: ${{ runner.temp }}/build.log
+          retention-days: 7
+          if-no-files-found: ignore
